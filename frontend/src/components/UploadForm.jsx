@@ -6,7 +6,7 @@ import { useLanguage } from '../i18n/LanguageContext'
 
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000'
 
-export default function UploadForm({ captureData, onResult, onReset }) {
+export default function UploadForm({ captureData, onResult, onReset, onLoadingChange }) {
   const { user } = useAuth()
   const { t } = useLanguage()
   const [loading, setLoading] = useState(false)
@@ -20,7 +20,14 @@ export default function UploadForm({ captureData, onResult, onReset }) {
       return
     }
 
+    // Front-end GPS validation
+    if (!captureData.lat || !captureData.lng || captureData.lat === 0.0 || captureData.lng === 0.0) {
+      setError("Geo-tag location missing. Enable GPS.")
+      return
+    }
+
     setLoading(true)
+    onLoadingChange?.(true)
     setError(null)
 
     const claimId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -49,45 +56,52 @@ export default function UploadForm({ captureData, onResult, onReset }) {
       onResult?.(json.data)
     } catch (err) {
       console.error('Submit error:', err)
-      setError(err.message || t('upload.errorGeneric'))
+      let msg = err.message || t('upload.errorGeneric')
+      if (msg.includes("Geo-tag missing") || msg.includes("Geo-tag not found")) {
+        msg = "❌ Geo-tag not found. Enable location permission and capture image."
+      } else if (msg.includes("Please upload crop field") || msg.includes("crop field image only")) {
+        msg = "❌ Invalid image. Please upload crop field image only."
+      }
+      setError(msg)
     } finally {
       setLoading(false)
       setProgress('')
+      onLoadingChange?.(false)
     }
   }
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      <div className="bg-forest-900/40 border border-forest-800/40 rounded-xl p-4 flex items-center gap-3">
+      <div className="bg-[#FCFAF5] border border-[#E6DCC9] rounded-xl p-4 flex items-center gap-3">
         {user?.photoURL ? (
-          <img src={user.photoURL} alt="" className="w-10 h-10 rounded-full border border-forest-600" />
+          <img src={user.photoURL} alt="" className="w-10 h-10 rounded-full border border-[#E6DCC9]" />
         ) : (
-          <div className="w-10 h-10 rounded-full bg-forest-700 flex items-center justify-center text-forest-300 font-semibold text-sm">
+          <div className="w-10 h-10 rounded-full bg-[#E88125] flex items-center justify-center text-white font-semibold text-sm">
             {user?.displayName?.[0] ?? 'F'}
           </div>
         )}
         <div>
-          <p className="text-sm font-medium text-white">{user?.displayName ?? t('upload.farmer')}</p>
-          <p className="text-xs text-forest-500 font-mono">{user?.uid?.slice(0, 16)}…</p>
+          <p className="text-sm font-bold text-[#10261C]">{user?.displayName ?? t('upload.farmer')}</p>
+          <p className="text-xs text-gray-500 font-mono">{user?.uid?.slice(0, 16)}…</p>
         </div>
       </div>
 
       {captureData ? (
-        <div className="flex items-center gap-2 text-sm text-forest-400 bg-forest-900/40 border border-forest-700/40 rounded-xl px-4 py-3">
-          <span className="text-green-400 text-base">✓</span>
+        <div className="flex items-center gap-2 text-sm text-green-800 bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+          <span className="text-green-600 text-base font-bold">✓</span>
           <span>
             {t('upload.photoReady')} · {new Date(captureData.timestamp).toLocaleString()}
           </span>
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-sm text-amber-400 bg-amber-900/10 border border-amber-800/30 rounded-xl px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
           <span>⚠️</span>
           <span>{t('upload.noPhoto')}</span>
         </div>
       )}
 
       {error && (
-        <div className="text-sm text-red-400 bg-red-900/20 border border-red-800/40 rounded-xl px-4 py-3">
+        <div className="text-sm text-red-800 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
           {error}
         </div>
       )}
@@ -95,7 +109,7 @@ export default function UploadForm({ captureData, onResult, onReset }) {
       <button
         type="submit"
         disabled={loading || !captureData}
-        className="btn-primary w-full flex items-center justify-center gap-2 py-3.5"
+        className="w-full flex items-center justify-center gap-2 py-3.5 bg-[#E88125] hover:bg-[#cf6f1b] text-white font-bold rounded-xl transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg"
       >
         {loading ? (
           <>
@@ -121,7 +135,7 @@ export default function UploadForm({ captureData, onResult, onReset }) {
         <button
           type="button"
           onClick={onReset}
-          className="w-full text-sm text-forest-500 hover:text-forest-300 transition-colors"
+          className="w-full text-sm text-gray-500 hover:text-[#10261C] transition-colors font-medium"
         >
           {t('upload.startOver')}
         </button>

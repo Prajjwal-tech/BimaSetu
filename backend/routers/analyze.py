@@ -15,8 +15,8 @@ from pathlib import Path
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from database import get_connection, init_db
-from ml.segmentor import segment_damage
-from ml.classifier import classify_damage
+# Production inference via Groq API (showcase modules kept in ml/ for demos)
+from ml.groq_vision import segment_damage, classify_damage, predict_crop_field
 from pdf.generator import generate_claim_pdf
 
 logger = logging.getLogger("bimasetu.analyze")
@@ -44,8 +44,8 @@ async def analyze(
     """
     Full pipeline:
     1. Save uploaded image
-    2. YOLOv8 segmentation → damage_pct
-    3. ResNet50 classification → damage_type
+    2. Groq vision segmentation → damage_pct
+    3. Groq vision classification → damage_type
     4. PDF generation
     5. Persist to SQLite
     6. Return enriched JSON response
@@ -55,6 +55,25 @@ async def analyze(
         image_bytes = await image.read()
         if not image_bytes:
             raise HTTPException(status_code=400, detail="Empty image file")
+
+        # --- Validation: Geo-tag Check ---
+        if not lat or not lng or lat == 0.0 or lng == 0.0:
+            logger.warning("Geo-tag validation failed: lat=%s, lng=%s", lat, lng)
+            return {
+                "success": False,
+                "data": {},
+                "error": "Geo-tag missing. Capture photo using live camera."
+            }
+
+        # --- Validation: Crop Field Check ---
+        is_crop, crop_conf = predict_crop_field(image_bytes)
+        if not is_crop:
+            logger.warning("Crop field validation failed: confidence=%s", crop_conf)
+            return {
+                "success": False,
+                "data": {},
+                "error": "Please upload crop field image only."
+            }
 
         ext = Path(image.filename or "upload.jpg").suffix or ".jpg"
         img_filename = f"{claim_id}{ext}"

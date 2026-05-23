@@ -1,9 +1,28 @@
 // frontend/src/context/AuthContext.jsx
 // Single source of truth for auth (local session + Firebase)
 
-import { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { auth, isFirebaseConfigured } from '../firebase'
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import {
+  onAuthStateChanged,
+  signOut,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signInWithPopup,
+  signInWithPhoneNumber,
+  RecaptchaVerifier,
+  updateProfile as updateFirebaseProfile
+} from 'firebase/auth'
+import {
+  collection,
+  query,
+  where,
+  getDocs,
+  getDoc,
+  doc,
+  setDoc,
+  serverTimestamp,
+} from 'firebase/firestore'
+import { auth, googleProvider, isFirebaseConfigured, db } from '../firebase'
 
 const AuthContext = createContext(null)
 
@@ -33,12 +52,86 @@ function normalizeLocalUser(stored, token) {
 function normalizeFirebaseUser(firebaseUser) {
   return {
     uid: firebaseUser.uid,
-    name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Farmer',
+    name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || firebaseUser.phoneNumber || 'Farmer',
     email: firebaseUser.email || '',
-    displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Farmer',
+    displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || firebaseUser.phoneNumber || 'Farmer',
     photoURL: firebaseUser.photoURL || null,
+    phoneNumber: firebaseUser.phoneNumber || null,
     _firebase: firebaseUser,
   }
+}
+
+async function findFarmerByPhone(phoneNumber) {
+  if (!phoneNumber) return null
+  try {
+    const farmersRef = collection(db, 'farmers')
+    const q = query(farmersRef, where('phone', '==', phoneNumber))
+    const snapshot = await getDocs(q)
+    if (snapshot.empty) return null
+    const farmerDoc = snapshot.docs[0]
+    return { id: farmerDoc.id, ...farmerDoc.data() }
+  } catch (err) {
+    console.error('Error querying farmer by phone:', err)
+    return null
+  }
+}
+
+async function findFarmerByUid(uid) {
+  if (!uid) return null
+  try {
+    const farmerRef = doc(db, 'farmers', uid)
+    const farmerSnap = await getDoc(farmerRef)
+    return farmerSnap.exists() ? { id: farmerSnap.id, ...farmerSnap.data() } : null
+  } catch (err) {
+    console.error('Error querying farmer by uid:', err)
+    return null
+  }
+}
+
+async function ensureFarmerRecord(firebaseUser) {
+  if (!firebaseUser) return { exists: false, phoneNumber: null, user: normalizeFirebaseUser(firebaseUser) }
+
+  let farmer = await findFarmerByUid(firebaseUser.uid)
+  if (!farmer && firebaseUser.phoneNumber) {
+    farmer = await findFarmerByPhone(firebaseUser.phoneNumber)
+  }
+
+  if (farmer) {
+    if (!firebaseUser.displayName && farmer.fullName) {
+      try {
+        await updateFirebaseProfile(firebaseUser, { displayName: farmer.fullName })
+      } catch (err) {
+        console.warn('Could not update Firebase displayName from Firestore:', err)
+      }
+    }
+    return { exists: true, profile: farmer, user: normalizeFirebaseUser(firebaseUser) }
+  }
+
+  return { exists: false, phoneNumber: firebaseUser.phoneNumber || null, user: normalizeFirebaseUser(firebaseUser) }
+}
+
+async function createFarmerRecord(firebaseUser, profileData) {
+  if (!firebaseUser?.uid) throw new Error('No authenticated Firebase user available.')
+  const phone = firebaseUser.phoneNumber || profileData.phone
+  const fullName = profileData.fullName?.trim() || firebaseUser.displayName || phone || ''
+  const payload = {
+    uid: firebaseUser.uid,
+    fullName,
+    phone,
+    village: profileData.village?.trim() || '',
+    state: profileData.state?.trim() || '',
+    email: firebaseUser.email || '',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    authProvider: 'phone',
+  }
+
+  await setDoc(doc(db, 'farmers', firebaseUser.uid), payload)
+  if (!firebaseUser.displayName && fullName) {
+    await updateFirebaseProfile(firebaseUser, { displayName: fullName })
+  }
+
+  return payload
 }
 
 function readLocalSession() {
@@ -76,6 +169,8 @@ function clearAllSessionKeys() {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const recaptchaVerifierRef = useRef(null)
+  const confirmationResultRef = useRef(null)
 
   useEffect(() => {
     const local = readLocalSession()
@@ -120,6 +215,97 @@ export function AuthProvider({ children }) {
     persistLocalSession(sessionUser, tokenPrefix)
     setUser(sessionUser)
     return sessionUser
+  }, [])
+
+  const loginWithEmail = useCallback(async (email, password) => {
+    if (isFirebaseConfigured && auth) {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password)
+      const normalized = normalizeFirebaseUser(userCredential.user)
+      setUser(normalized)
+      return normalized
+    } else {
+      return login({ email, tokenPrefix: 'token' })
+    }
+  }, [login])
+
+  const signUpWithEmail = useCallback(async (email, password, fullName) => {
+    if (isFirebaseConfigured && auth) {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password)
+      await updateFirebaseProfile(userCredential.user, {
+        displayName: fullName
+      })
+      const normalized = normalizeFirebaseUser({
+        ...userCredential.user,
+        displayName: fullName
+      })
+      setUser(normalized)
+      return normalized
+    } else {
+      return login({ email, name: fullName, tokenPrefix: 'signup' })
+    }
+  }, [login])
+
+  const loginWithGoogle = useCallback(async () => {
+    if (isFirebaseConfigured && auth && googleProvider) {
+      const userCredential = await signInWithPopup(auth, googleProvider)
+      const normalized = normalizeFirebaseUser(userCredential.user)
+      setUser(normalized)
+      return normalized
+    } else {
+      return login({ email: 'google@gmail.com', name: 'Google User', tokenPrefix: 'google' })
+    }
+  }, [login])
+
+  // Send OTP to a phone number. containerId = id of the invisible recaptcha div
+  const loginWithPhone = useCallback(async (phoneNumber, containerId = 'recaptcha-container') => {
+    if (isFirebaseConfigured && auth) {
+      // Clear any previous verifier
+      if (recaptchaVerifierRef.current) {
+        recaptchaVerifierRef.current.clear()
+        recaptchaVerifierRef.current = null
+      }
+      const verifier = new RecaptchaVerifier(auth, containerId, {
+        size: 'invisible',
+        callback: () => {},
+      })
+      recaptchaVerifierRef.current = verifier
+      const confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, verifier)
+      confirmationResultRef.current = confirmationResult
+      return confirmationResult
+    } else {
+      // Mock fallback: just resolve
+      confirmationResultRef.current = { _mock: true }
+      return confirmationResultRef.current
+    }
+  }, [])
+
+  // Verify OTP code returned by the user
+  const verifyOtp = useCallback(async (otp) => {
+    if (!confirmationResultRef.current) throw new Error('No OTP session. Request OTP first.')
+    if (confirmationResultRef.current._mock) {
+      // Mock fallback
+      return login({ email: 'phone@bimasetu.app', name: 'Farmer', tokenPrefix: 'otp' })
+    }
+    const userCredential = await confirmationResultRef.current.confirm(otp)
+    const firebaseUser = userCredential.user
+    const normalized = normalizeFirebaseUser(firebaseUser)
+    setUser(normalized)
+
+    const accountCheck = await ensureFarmerRecord(firebaseUser)
+    if (!accountCheck.exists && accountCheck.phoneNumber) {
+      return { newFarmer: true, phoneNumber: accountCheck.phoneNumber }
+    }
+
+    return normalized
+  }, [login])
+
+  const createFarmerProfile = useCallback(async (profileData) => {
+    const firebaseUser = auth?.currentUser
+    if (!firebaseUser) throw new Error('Unable to create farmer profile without a logged-in user.')
+    const profile = await createFarmerRecord(firebaseUser, profileData)
+    const normalized = normalizeFirebaseUser({ ...firebaseUser, displayName: profile.fullName })
+    setUser(normalized)
+    return profile
   }, [])
 
   const loginAsMockUser = useCallback((mockUser) => {
@@ -171,6 +357,12 @@ export function AuthProvider({ children }) {
         user,
         loading,
         login,
+        loginWithEmail,
+        signUpWithEmail,
+        loginWithGoogle,
+        loginWithPhone,
+        verifyOtp,
+        createFarmerProfile,
         logout,
         loginAsMockUser,
         updateProfile,

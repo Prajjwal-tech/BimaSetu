@@ -16,6 +16,7 @@ export default function CameraCapture({ onCapture }) {
   const [timestamp,    setTimestamp]    = useState(null)
   const [camError,     setCamError]     = useState(null)
   const [capturing,    setCapturing]    = useState(false)
+  const [gpsLoading,   setGpsLoading]   = useState(false)
 
   // ── Stop stream on unmount ─────────────────────────────────────
   useEffect(() => {
@@ -30,9 +31,59 @@ export default function CameraCapture({ onCapture }) {
     setCameraActive(false)
   }
 
-  // ── Start rear camera ──────────────────────────────────────────
+  // ── Request GPS location using browser/device hardware ─────────
+  const requestGPSLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setGpsError('Geolocation not supported in this browser')
+      setGpsLoading(false)
+      return
+    }
+
+    setGpsLoading(true)
+    setGpsError(null)
+
+    const options = {
+      enableHighAccuracy: true, // Forces using high-accuracy GPS hardware (device GPS)
+      timeout: 10000,           // 10 seconds timeout
+      maximumAge: 0             // Bypass cached values
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const coords = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy
+        }
+        setGps(coords)
+        setGpsError(null)
+        setGpsLoading(false)
+        console.log("GPS location fetched successfully via browser:", coords)
+      },
+      err => {
+        console.error("GPS location permission or fetch failed:", err)
+        let errorMsg = 'GPS unavailable. Enable location access and GPS on your device.'
+        if (err.code === err.PERMISSION_DENIED) {
+          errorMsg = 'Location permission denied. Please allow location access in your browser settings.'
+        } else if (err.code === err.TIMEOUT) {
+          errorMsg = 'GPS lock timeout. Ensure you are outdoors or near a window for better GPS reception.'
+        }
+        setGpsError(errorMsg)
+        setGpsLoading(false)
+      },
+      options
+    )
+  }, [])
+
+  // ── Start rear camera + Request location permission ────────────
   const startCamera = async () => {
     setCamError(null)
+    setGps(null)
+    setGpsError(null)
+    
+    // Explicitly prompt/request GPS permission from the browser immediately
+    requestGPSLocation()
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
@@ -51,10 +102,14 @@ export default function CameraCapture({ onCapture }) {
 
   // ── Capture frame + GPS ────────────────────────────────────────
   const capturePhoto = useCallback(() => {
+    if (capturing) return
     setCapturing(true)
     const video  = videoRef.current
     const canvas = canvasRef.current
-    if (!video || !canvas) return
+    if (!video || !canvas) {
+      setCapturing(false)
+      return
+    }
 
     canvas.width  = video.videoWidth  || 1280
     canvas.height = video.videoHeight || 720
@@ -65,36 +120,50 @@ export default function CameraCapture({ onCapture }) {
 
     canvas.toBlob(blob => {
       if (!blob) { setCapturing(false); return }
-      const url = URL.createObjectURL(blob)
-      setPreview(url)
-      setCapturedBlob(blob)
 
-      // Get GPS
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          pos => {
-            const g = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }
-            setGps(g)
-            setGpsError(null)
-            onCapture?.({ blob, timestamp: ts, ...g })
-            setCapturing(false)
-          },
-          () => {
-            setGpsError('GPS unavailable — location will be recorded as 0, 0')
-            onCapture?.({ blob, timestamp: ts, lat: 0, lng: 0, accuracy: null })
-            setCapturing(false)
-          },
-          { enableHighAccuracy: true, timeout: 8000 }
-        )
-      } else {
-        setGpsError('Geolocation not supported in this browser')
-        onCapture?.({ blob, timestamp: ts, lat: 0, lng: 0, accuracy: null })
+      const finishCapture = (finalGps) => {
+        const url = URL.createObjectURL(blob)
+        setPreview(url)
+        setCapturedBlob(blob)
+        onCapture?.({ blob, timestamp: ts, ...finalGps })
         setCapturing(false)
+        stopCamera()
       }
 
-      stopCamera()
+      // Use the pre-acquired GPS coordinates if available
+      if (gps) {
+        finishCapture(gps)
+      } else {
+        // Fallback: Attempt to query coordinates again using device GPS
+        if (navigator.geolocation) {
+          setGpsLoading(true)
+          navigator.geolocation.getCurrentPosition(
+            pos => {
+              const g = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }
+              setGps(g)
+              setGpsError(null)
+              setGpsLoading(false)
+              finishCapture(g)
+            },
+            err => {
+              console.error("GPS fetch during capture failed:", err)
+              let errorMsg = 'GPS unavailable — location will be recorded as 0, 0'
+              if (err.code === err.PERMISSION_DENIED) {
+                errorMsg = 'Location permission denied. GPS recorded as 0, 0.'
+              }
+              setGpsError(errorMsg)
+              setGpsLoading(false)
+              finishCapture({ lat: 0, lng: 0, accuracy: null })
+            },
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+          )
+        } else {
+          setGpsError('Geolocation not supported in this browser')
+          finishCapture({ lat: 0, lng: 0, accuracy: null })
+        }
+      }
     }, 'image/jpeg', 0.92)
-  }, [onCapture])
+  }, [onCapture, gps, capturing, requestGPSLocation])
 
   // ── File upload fallback ───────────────────────────────────────
   const handleFileUpload = (e) => {
@@ -135,7 +204,7 @@ export default function CameraCapture({ onCapture }) {
   return (
     <div className="space-y-4">
       {/* Camera viewfinder / preview */}
-      <div className="relative w-full aspect-video rounded-2xl overflow-hidden bg-forest-900 border border-forest-700/60">
+      <div className={`relative w-full aspect-video rounded-2xl overflow-hidden bg-[#FCFAF5] border border-[#E6DCC9] ${cameraActive && !preview ? 'scan-container scan-border scan-pulse' : ''}`}>
         {!preview && (
           <video
             ref={videoRef}
@@ -148,15 +217,70 @@ export default function CameraCapture({ onCapture }) {
         {preview ? (
           <img src={preview} alt="Captured" className="w-full h-full object-cover" />
         ) : !cameraActive ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-forest-500">
-            <svg className="w-12 h-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-gray-400">
+            <svg className="w-12 h-12 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                 d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
-            <p className="text-sm">Camera preview will appear here</p>
+            <p className="text-sm font-semibold text-gray-500">Camera preview will appear here</p>
           </div>
         ) : null}
+
+        {/* GPS HUD Overlay */}
+        {cameraActive && !preview && (
+          <div className="absolute top-3 left-3 z-10 flex flex-col gap-1.5 max-w-[90%] pointer-events-auto">
+            {gpsLoading ? (
+              <div className="bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-amber-500/30 text-amber-300 flex items-center gap-2 text-xs font-semibold shadow-lg">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                <span>🛰️ Acquiring GPS Lock (Device GPS)...</span>
+              </div>
+            ) : gps ? (
+              <div className="bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-emerald-500/30 text-emerald-400 flex flex-col gap-0.5 text-xs font-semibold shadow-lg animate-fade-in">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>📍 GPS Lock Acquired</span>
+                  {gps.accuracy && (
+                    <span className="text-[10px] text-green-300 bg-green-950/60 px-1 py-0.2 rounded border border-green-800">
+                      ±{Math.round(gps.accuracy)}m
+                    </span>
+                  )}
+                </div>
+                <div className="text-[10px] text-green-300 font-mono pl-3.5">
+                  {gps.lat.toFixed(6)}°, {gps.lng.toFixed(6)}°
+                </div>
+              </div>
+            ) : gpsError ? (
+              <div className="bg-black/75 backdrop-blur-md px-3 py-2 rounded-xl border border-rose-500/30 text-rose-400 flex flex-col gap-1 text-xs font-semibold shadow-lg animate-fade-in">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-rose-500" />
+                    <span>⚠️ GPS Location Error</span>
+                  </div>
+                  <button 
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); requestGPSLocation(); }}
+                    className="text-[10px] text-sky-400 hover:text-sky-300 underline font-medium cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
+                <div className="text-[10px] text-rose-300 font-medium pl-3.5 leading-normal max-w-xs">
+                  {gpsError}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {/* Blocking Loading Overlay during Capture */}
+        {capturing && (
+          <div className="absolute inset-0 bg-black/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-20 text-white">
+            <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm font-semibold tracking-wide text-emerald-400">Processing Photo & Securing GPS Lock...</p>
+            <p className="text-[11px] text-gray-400">Using high accuracy hardware GPS</p>
+          </div>
+        )}
 
         {/* Capture button overlay */}
         {cameraActive && !preview && (
@@ -164,12 +288,12 @@ export default function CameraCapture({ onCapture }) {
             <button
               onClick={capturePhoto}
               disabled={capturing}
-              className="w-16 h-16 rounded-full bg-white border-4 border-forest-600 shadow-lg
+              className="w-16 h-16 rounded-full bg-white border-4 border-[#E88125] shadow-lg
                          hover:scale-105 active:scale-95 transition-transform duration-150 flex items-center justify-center"
             >
               {capturing
-                ? <div className="w-6 h-6 rounded-full border-2 border-forest-600 border-t-transparent animate-spin" />
-                : <div className="w-10 h-10 rounded-full bg-forest-600" />}
+                ? <div className="w-6 h-6 rounded-full border-2 border-[#E88125] border-t-transparent animate-spin" />
+                : <div className="w-10 h-10 rounded-full bg-[#E88125]" />}
             </button>
           </div>
         )}
@@ -179,22 +303,22 @@ export default function CameraCapture({ onCapture }) {
 
       {/* Metadata strip */}
       {(gps || gpsError || timestamp) && (
-        <div className="bg-forest-900/60 border border-forest-800/50 rounded-xl p-3 space-y-1.5 text-xs font-mono">
+        <div className="bg-[#FCFAF5] border border-[#E6DCC9] rounded-xl p-3 space-y-1.5 text-xs font-mono shadow-inner">
           {timestamp && (
-            <div className="flex items-center gap-2 text-forest-300">
-              <span className="text-forest-500">⏱</span>
+            <div className="flex items-center gap-2 text-gray-700">
+              <span className="text-gray-400">⏱</span>
               <span>{timestamp}</span>
             </div>
           )}
           {gps && (
-            <div className="flex items-center gap-2 text-forest-300">
-              <span className="text-forest-500">📍</span>
+            <div className="flex items-center gap-2 text-gray-700">
+              <span className="text-gray-400">📍</span>
               <span>{gps.lat.toFixed(6)}°, {gps.lng.toFixed(6)}°</span>
-              {gps.accuracy && <span className="text-forest-600">±{Math.round(gps.accuracy)}m</span>}
+              {gps.accuracy && <span className="text-gray-500">±{Math.round(gps.accuracy)}m</span>}
             </div>
           )}
           {gpsError && (
-            <div className="flex items-center gap-2 text-amber-400">
+            <div className="flex items-center gap-2 text-amber-800">
               <span>⚠️</span>
               <span>{gpsError}</span>
             </div>
@@ -204,12 +328,12 @@ export default function CameraCapture({ onCapture }) {
 
       {/* Action buttons */}
       {camError && (
-        <p className="text-sm text-red-400 bg-red-900/20 border border-red-800/40 rounded-lg px-3 py-2">{camError}</p>
+        <p className="text-sm text-red-800 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{camError}</p>
       )}
 
       <div className="flex gap-3 flex-wrap">
         {!preview && !cameraActive && (
-          <button onClick={startCamera} className="btn-primary flex items-center gap-2">
+          <button onClick={startCamera} className="bg-[#E88125] hover:bg-[#cf6f1b] text-white font-bold px-5 py-2.5 rounded-xl transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg flex items-center gap-2">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                 d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
@@ -219,11 +343,11 @@ export default function CameraCapture({ onCapture }) {
           </button>
         )}
         {cameraActive && (
-          <button onClick={stopCamera} className="btn-secondary text-sm">Cancel</button>
+          <button onClick={stopCamera} className="border border-[#E6DCC9] text-[#10261C] bg-white hover:bg-gray-50 font-bold px-5 py-2.5 rounded-xl transition-all duration-200 active:scale-95 shadow-sm text-sm">Cancel</button>
         )}
 
         {/* File upload always available */}
-        <label className="btn-secondary flex items-center gap-2 cursor-pointer text-sm">
+        <label className="border border-[#E6DCC9] text-[#10261C] bg-white hover:bg-gray-50 font-bold px-5 py-2.5 rounded-xl transition-all duration-200 active:scale-95 shadow-sm flex items-center gap-2 cursor-pointer text-sm">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -233,7 +357,7 @@ export default function CameraCapture({ onCapture }) {
         </label>
 
         {preview && (
-          <button onClick={reset} className="text-sm text-red-400 hover:text-red-300 transition-colors ml-auto">
+          <button onClick={reset} className="text-sm text-red-600 hover:text-red-800 font-bold transition-colors ml-auto">
             Retake
           </button>
         )}

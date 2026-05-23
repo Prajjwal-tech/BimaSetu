@@ -34,16 +34,19 @@ def _load_yolo():
     global _yolo_model
     if _yolo_model is not None:
         return _yolo_model
-    if not Path(MODEL_PATH).exists():
-        logger.warning("YOLOv8 weights not found at %s — will use HSV fallback", MODEL_PATH)
-        return None
+    
+    # 1. Try custom path from env, 2. try default name
+    path_to_try = MODEL_PATH
+    if not Path(path_to_try).exists():
+        path_to_try = "yolov8n-seg.pt"
+    
     try:
         from ultralytics import YOLO  # imported here to avoid hard dep at startup
-        _yolo_model = YOLO(MODEL_PATH)
-        logger.info("YOLOv8 model loaded from %s", MODEL_PATH)
+        _yolo_model = YOLO(path_to_try)
+        logger.info("YOLOv8 model loaded from %s", path_to_try)
         return _yolo_model
     except Exception as exc:
-        logger.error("Failed to load YOLOv8: %s", exc)
+        logger.error("Failed to load YOLOv8 model: %s. Will use HSV fallback.", exc)
         return None
 
 
@@ -58,7 +61,8 @@ def segment_damage(image_bytes: bytes) -> dict:
         {
           "damage_pct": float,      # 0–100
           "mask_path": str,         # relative path to saved overlay PNG
-          "method": str             # "yolov8" | "hsv_fallback"
+          "method": str,            # "yolov8" | "hsv_fallback"
+          "confidence": float       # confidence score
         }
     """
     # Decode image
@@ -87,6 +91,13 @@ def _segment_yolov8(model, img_bgr: np.ndarray) -> dict:
     h, w = img_bgr.shape[:2]
     total_mask = np.zeros((h, w), dtype=np.uint8)
     damaged_mask = np.zeros((h, w), dtype=np.uint8)
+    conf_score = 0.85  # default baseline if no objects detected
+
+    # Calculate average confidence of boxes
+    if result.boxes is not None and len(result.boxes) > 0:
+        conf_vals = result.boxes.conf.cpu().numpy().tolist()
+        if len(conf_vals) > 0:
+            conf_score = float(np.mean(conf_vals))
 
     if result.masks is not None:
         for mask_tensor in result.masks.data:
@@ -108,7 +119,12 @@ def _segment_yolov8(model, img_bgr: np.ndarray) -> dict:
 
     damage_pct = _calc_damage_pct(total_mask, damaged_mask)
     mask_path = _save_overlay(img_bgr, total_mask, damaged_mask)
-    return {"damage_pct": round(damage_pct, 2), "mask_path": str(mask_path), "method": "yolov8"}
+    return {
+        "damage_pct": round(damage_pct, 2),
+        "mask_path": str(mask_path),
+        "method": "yolov8",
+        "confidence": round(conf_score, 4)
+    }
 
 
 # -----------------------------------------------------------------
@@ -128,7 +144,12 @@ def _segment_hsv_fallback(img_bgr: np.ndarray) -> dict:
 
     damage_pct = _calc_damage_pct(total_mask, damaged_mask)
     mask_path = _save_overlay(img_bgr, total_mask, damaged_mask)
-    return {"damage_pct": round(damage_pct, 2), "mask_path": str(mask_path), "method": "hsv_fallback"}
+    return {
+        "damage_pct": round(damage_pct, 2),
+        "mask_path": str(mask_path),
+        "method": "hsv_fallback",
+        "confidence": 0.85
+    }
 
 
 # -----------------------------------------------------------------

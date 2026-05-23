@@ -71,8 +71,8 @@ const BimaSetuNavbar = () => {
 
   const navLinkClass = (path) =>
     location.pathname === path
-      ? 'text-amber-400 font-medium'
-      : 'text-gray-300 hover:text-amber-400'
+      ? 'text-[#E88125] font-semibold'
+      : 'text-white/80 hover:text-[#E88125] font-medium'
 
   const handleLogout = async () => {
     await logout()
@@ -132,8 +132,8 @@ const BimaSetuNavbar = () => {
       <nav
         className={`fixed top-0 left-0 w-full z-50 transition-all duration-300 ${
           scrolled
-            ? 'bg-[#0A120E]/90 backdrop-blur-xl border-b border-emerald-800/40 shadow-xl'
-            : 'bg-[#0A120E]/70 backdrop-blur-md border-b border-emerald-900/30'
+            ? 'bg-[#10261C]/95 backdrop-blur-xl border-b border-emerald-950/40 shadow-xl'
+            : 'bg-[#10261C] border-b border-emerald-950/20'
         }`}
       >
         <div className="max-w-7xl mx-auto px-4 md:px-8 h-16 md:h-20 flex items-center justify-between gap-2">
@@ -144,9 +144,9 @@ const BimaSetuNavbar = () => {
             tabIndex={0}
             onKeyDown={(e) => e.key === 'Enter' && handleBrandClick()}
           >
-            <Sprout className="w-7 h-7 text-amber-500 group-hover:scale-110 transition" />
-            <span className="text-xl md:text-2xl font-extrabold bg-gradient-to-r from-emerald-300 to-amber-400 bg-clip-text text-transparent">
-              {t('nav.brand')}
+            <Sprout className="w-7 h-7 text-[#E88125] group-hover:scale-110 transition" />
+            <span className="text-xl md:text-2xl font-black text-white tracking-wide">
+              Bima<span className="text-[#E88125]">Setu</span>
             </span>
           </div>
 
@@ -156,7 +156,7 @@ const BimaSetuNavbar = () => {
                 key={item.labelKey}
                 onClick={item.onClick || (() => handleScrollTo(item.id))}
                 className={`px-3 lg:px-4 py-2 rounded-full transition text-sm ${
-                  item.path ? navLinkClass(item.path) : 'text-gray-300 hover:text-amber-400'
+                  item.path ? navLinkClass(item.path) : 'text-white/80 hover:text-[#E88125] font-medium'
                 }`}
               >
                 {t(item.labelKey)}
@@ -172,14 +172,14 @@ const BimaSetuNavbar = () => {
                 <>
                   <button
                     onClick={handleLogin}
-                    className="px-4 py-2 rounded-full border border-emerald-700 text-emerald-300 hover:border-amber-500 hover:text-amber-400 transition text-sm"
+                    className="px-5 py-2 rounded-full border border-white/20 text-white/95 hover:border-[#E88125] hover:text-[#E88125] transition text-sm font-semibold"
                   >
                     <LogIn className="w-4 h-4 inline mr-1.5" />
                     {t('nav.login')}
                   </button>
                   <button
                     onClick={handleSignup}
-                    className="px-4 py-2 rounded-full bg-amber-500 text-black font-semibold hover:bg-amber-400 transition text-sm"
+                    className="px-5 py-2 rounded-full bg-[#E88125] text-white font-semibold hover:bg-[#cf6f1b] transition text-sm shadow-md"
                   >
                     <UserPlus className="w-4 h-4 inline mr-1.5" />
                     {t('nav.signup')}
@@ -189,14 +189,14 @@ const BimaSetuNavbar = () => {
                 <>
                   <button
                     onClick={handleDashboard}
-                    className="px-4 py-2 rounded-full border border-emerald-700 text-emerald-300 hover:text-amber-400 transition text-sm"
+                    className="px-5 py-2 rounded-full border border-white/20 text-white/95 hover:border-[#E88125] hover:text-[#E88125] transition text-sm font-semibold"
                   >
                     <LayoutDashboard className="w-4 h-4 inline mr-1.5" />
                     {t('nav.dashboard')}
                   </button>
                   <button
                     onClick={handleLogout}
-                    className="px-4 py-2 rounded-full bg-red-500/20 text-red-400 hover:bg-red-500/30 transition text-sm"
+                    className="px-5 py-2 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 transition text-sm font-semibold"
                   >
                     <LogOut className="w-4 h-4 inline mr-1.5" />
                     {t('nav.logout')}
@@ -207,7 +207,7 @@ const BimaSetuNavbar = () => {
 
             <button
               onClick={() => setIsOpen(!isOpen)}
-              className="md:hidden text-emerald-300 p-1"
+              className="md:hidden text-white/95 p-1"
               aria-label="Toggle menu"
             >
               {isOpen ? <X /> : <Menu />}
@@ -216,7 +216,7 @@ const BimaSetuNavbar = () => {
         </div>
 
         {isOpen && (
-          <div className="md:hidden bg-[#08100C] p-6 space-y-4 border-t border-emerald-900/50">
+          <div className="md:hidden bg-[#0C1E16] p-6 space-y-4 border-t border-emerald-950/50">
             <div className="pb-2">
               <LanguageSwitcher />
             </div>
@@ -225,19 +225,19 @@ const BimaSetuNavbar = () => {
                 key={item.labelKey}
                 onClick={item.onClick || (() => handleScrollTo(item.id))}
                 className={`block w-full text-left transition ${
-                  item.path ? navLinkClass(item.path) : 'text-gray-300 hover:text-amber-400'
+                  item.path ? navLinkClass(item.path) : 'text-white/80 hover:text-[#E88125] font-medium'
                 }`}
               >
                 {t(item.labelKey)}
               </button>
             ))}
-            <hr className="border-emerald-900" />
+            <hr className="border-emerald-950/40" />
             {!isLoggedIn ? (
               <>
-                <button onClick={handleLogin} className="block w-full text-left text-emerald-300">
+                <button onClick={handleLogin} className="block w-full text-left text-white/80 hover:text-[#E88125]">
                   {t('nav.login')}
                 </button>
-                <button onClick={handleSignup} className="block w-full text-left text-amber-400">
+                <button onClick={handleSignup} className="block w-full text-left text-[#E88125] font-semibold">
                   {t('nav.signup')}
                 </button>
               </>
